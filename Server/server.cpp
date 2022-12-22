@@ -12,6 +12,11 @@ using namespace std;
 
 static const int MAXPENDING = 5; // Max number of concurrent connections for server.
 
+int clientsCount = 0; // Counter for number of clients
+
+string OK_RESPOND = "HTTP/1.1 200 OK\\r\\n \n";
+string NOT_FOUND_RESPOND = "HTTP/1.1 404 Not Found\\r\\n \n";
+
 // Struct for measuring client's time on server for implementing timeout functionality.
 struct client {
     int clientSocket;
@@ -45,7 +50,9 @@ void * clientTimeOut (void *){
     }
 }
 
-string trim(const string& str){
+
+// Remove any unnecessary spaces.
+string getCoreRequest(const string& str){
     size_t first = str.find_first_not_of(' ');
     if (string::npos == first)
         return str;
@@ -53,8 +60,9 @@ string trim(const string& str){
     return str.substr(first, (last - first + 1));
 }
 
+// Split request delimited by space.
 vector<string> splitRequest(string str){
-    str = trim(str);
+    str = getCoreRequest(str);
     vector<string> vec;
     int counter = 0;
     string word = "";
@@ -71,14 +79,6 @@ vector<string> splitRequest(string str){
     return vec;
 }
 
-bool checkFileExist(string fileName){
-    ifstream ifile;
-    ifile.open(fileName);
-    if(ifile)
-        return true;
-    else
-        return false;
-}
 
 string readFileContent(string fileName){
     ifstream fin(fileName);
@@ -97,11 +97,12 @@ void sendChunks(int socket , string s) {
         send(socket, beginner + i,min(500, (int)s.length() - i), 0);
 }
 
-void saveFile (string fileName, string content){
-    ofstream f_stream(fileName.c_str());
-    f_stream.write(content.c_str(), content.length());
+string getContentType(string fname){
+    if (fname.find(".txt") != std::string::npos)
+        return "text/plain";
+    if (fname.find(".html") != std::string::npos)
+        return "text/html";
 }
-
 
 string getRequestedFileContent(string fileName){
     string line;
@@ -113,55 +114,107 @@ string getRequestedFileContent(string fileName){
     return content;
 }
 
-string getContentType(string fname){
-    if (fname.find(".txt") != std::string::npos)
-        return "text/plain";
-    if (fname.find(".html") != std::string::npos)
-        return "text/html";
+void saveFile (string fileName, string content){
+    ofstream f_stream(fileName.c_str());
+    f_stream.write(content.c_str(), content.length());
 }
 
 
-void * handleConnection(void* S_clientStruct)
+bool checkFileExist(string fileName){
+    ifstream ifile;
+    ifile.open(fileName);
+    if(ifile)
+        return true;
+    else
+        return false;
+}
+
+void handleGet(string fileName, int socketClient){
+
+    if (checkFileExist(fileName)){
+        string ok = OK_RESPOND;
+        char * tab2 = &ok[0];
+        write(socketClient, tab2, strlen(tab2));
+        string content = readFileContent(fileName);
+        int fileSize = content.size();
+        write(socketClient, &fileSize, sizeof(int));
+        sendChunks(socketClient, content);
+    } else {
+        string str = NOT_FOUND_RESPOND;
+        char * tab2 = &str[0];
+        write(socketClient, tab2, strlen(tab2));
+        string content = readFileContent("not_found.txt");
+        int fileSize = content.size();
+        write(socketClient, &fileSize, sizeof(int));
+        sendChunks(socketClient, content);
+    }
+
+}
+
+void handleExternalGet(string fileName, int socketClient){
+
+    string real = "";
+    for (int i = 1; i < fileName.size() ; i++){
+        real += fileName[i];
+    }
+
+    if (checkFileExist(real)){
+        cout << endl << real << endl;
+        string fContent =  getRequestedFileContent(real);
+        int cLength = fContent.size();
+        string conType = getContentType(real);
+        string str = "HTTP/1.1 200 OK\nContent-Type: " + conType+ "\nContent-Length: " + to_string(cLength) + "\n\n" + getRequestedFileContent(real);
+        char * tab2 = &str[0];
+        write(socketClient, tab2, strlen(tab2));
+    } else {
+        string fContent =  getRequestedFileContent("not_found.txt");
+        int cLength = fContent.size();
+        string conType = getContentType(fileName);
+        string str = "HTTP/1.1 404 Not Found\n";
+        char * tab2 = &str[0];
+        write(socketClient, tab2, strlen(tab2));
+    }
+
+}
+
+
+
+void * handleConnection(void* socket)
 {
-    
-    client clientStruct = *((client*) S_clientStruct);
+
+    //Initalize Variables
+    string overAllBuffer = "";
+    client clientStruct = *((client*) socket);
     int socketClient = clientStruct.clientSocket;
-
-    string total_buffer = "";
+    
+    // Main loop
     while (1){
-
+       
         char buffer[4096] = {0};
+
+        // Read until end of request
         long long val = read(socketClient, buffer, 4096);
-        
         if (val <= 0) break;
+
         cout << buffer << endl;
         cout << flush;
-        buffer[strlen(buffer) - 1] = '\0';
-        total_buffer += buffer;
-        vector<string> splits = splitRequest(total_buffer);
-        if (splits[0] == "get" || splits[0] == "client_get") {
-            string fileName = splits[1];
-            if (checkFileExist(fileName)){
-                string ok = "HTTP/1.1 200 OK\\r\\n \n";
-                char * tab2 = &ok[0];
-                write(socketClient, tab2, strlen(tab2));
-                string content = readFileContent(fileName);
-                int fileSize = content.size();
-                write(socketClient, &fileSize, sizeof(int));
-                sendChunks(socketClient, content);
-            } else {
-                string str = "HTTP/1.1 404 Not Found\\r\\n \n";
-                char * tab2 = &str[0];
-                write(socketClient, tab2, strlen(tab2));
-                string content = readFileContent("not_found.txt");
-                int fileSize = content.size();
-                write(socketClient, &fileSize, sizeof(int));
-                sendChunks(socketClient, content);
-            }
 
-        } else if (splits[0] == "post" || splits[0] == "client_post"){
+        // Add terminating char at the end of filled buffer.
+        buffer[strlen(buffer) - 1] = '\0';
+
+        overAllBuffer += buffer;
+
+        // Parse Request and split it by space.
+        vector<string> splits = splitRequest(overAllBuffer);
+
+        if (splits[0] == "client_get") {
             string fileName = splits[1];
-            string str = "HTTP/1.1 200 OK\\r\\n \n";
+            handleGet(fileName, socketClient);
+
+        } 
+        else if (splits[0] == "client_post"){
+            string fileName = splits[1];
+            string str = OK_RESPOND;
             char * tab2 = &str[0];
             write(socketClient, tab2, strlen(tab2));
             bzero(buffer, 4096);
@@ -174,40 +227,27 @@ void * handleConnection(void* S_clientStruct)
             string res = "File is saved successfully \n";
             char * msg = &res[0];
             write(socketClient, msg, strlen(msg));
-        } else if (splits[0] == "GET") {
+        }
+        else if (splits[0] == "GET") {
             string fileName = splits[1];
-            string real = "";
-            for (int i = 1; i < fileName.size() ; i++){real += fileName[i];}
-            if (checkFileExist(real)){
-                cout << endl << real << endl;
-                string fContent =  getRequestedFileContent(real);
-                int cLength = fContent.size();
-                string conType = getContentType(real);
-                string str = "HTTP/1.1 200 OK\nContent-Type: " + conType+ "\nContent-Length: " + to_string(cLength) + "\n\n" + getRequestedFileContent(real);
-                char * tab2 = &str[0];
-                write(socketClient, tab2, strlen(tab2));
-            } else {
-                string fContent =  getRequestedFileContent("not_found.txt");
-                int cLength = fContent.size();
-                string conType = getContentType(fileName);
-                string str = "HTTP/1.1 404 Not Found\n";
-                char * tab2 = &str[0];
-                write(socketClient, tab2, strlen(tab2));
-            }
-        } else if (splits[0] == "close") {
+            
+        } 
+        else if (splits[0] == "close") {
             break;
-        } else {
-            string str = "HTTP/1.1 404 Not Found\\r\\n \n";
+        } 
+        else {
+            string str = NOT_FOUND_RESPOND;
             char * tab2 = new char [str.length()+1];
             strcpy (tab2, str.c_str());
             write(socketClient, tab2, strlen(tab2));
         }
         bzero(buffer, 4096);
-        total_buffer = "";
+        overAllBuffer = "";
     }
     close(socketClient);
     return NULL;
 }
+
 
 
 
@@ -227,7 +267,7 @@ int main(int argc, char **argv){
     int portNumber = atoi(argv[1]);
     
     // Create our Listening Socket and handle error if it exists.
-    int serverSocket = socket(PF_INET, SOCK_STREAM, 0);
+    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0){
         cout << "Error: couldn't create server socket";
         exit(-1);
@@ -261,23 +301,34 @@ int main(int argc, char **argv){
     pthread_t timeout;
     pthread_create(&timeout, NULL, clientTimeOut, NULL);
 
+    
     // main loop.
     while(1){
+        cout << "Waiting for a connection" << endl;
         cout << flush;
 
+        // Accept Connection
         int newSocket = accept(serverSocket, (struct sockaddr*) &socketAddress, (socklen_t*) &socketAddressLength);
         if (newSocket < 0){
             cout << "Error: couldn't accept connection";
             exit(-1);
         }
-        pthread_t t;
+
+        pthread_t thread;
+
+        // Create Client Struct for new Connection
         client c;
         c.clientSocket = newSocket;
         time(&c.timeEntered); 
         
         clients.push_back(&c);
-        pthread_create(&t, NULL, handleConnection, &c);
-    }
 
+         // Create Thread
+        int threadState = pthread_create(&thread, NULL, handleConnection, &c);
+        if (threadState < 0) {
+            cout << "Error: couldn't create thread";
+            exit(-1);
+        }
+    }
     return 0;
 }

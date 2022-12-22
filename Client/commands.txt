@@ -1,0 +1,3 @@
+client_get asg.txt HTTP
+client_get test2.html HTTP
+client_post test1.txt HTTP
