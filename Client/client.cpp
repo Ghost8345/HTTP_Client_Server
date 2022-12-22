@@ -87,6 +87,8 @@ int main(int argc, char const *argv[]){
         exit(-1) ;
     }
 
+    char buffer[1024] = {0};
+
     // Connect to Server and handle error.
     int connectState = connect(clientSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress));
     if ( connectState < 0){
@@ -96,26 +98,30 @@ int main(int argc, char const *argv[]){
     // Get Commands from text files
     vector<string> commands = getCommands("commands.txt");
 
-    char buffer[1024] = {0};
+    
 
     // Loop through each command and send it to server.
     for (int i = 0; i < commands.size() ; i++){
         string command = commands[i];
-        vector<string> splits = splitRequest(command);
+        vector<string> words = splitRequest(command);
         bzero(buffer, 1024);
-        if (splits[0] == "client_get"){
-            string type = splits[0];
+        if (words[0] == "client_get"){
+            string type = words[0];
             char * tempBuffer = &command[0];
             cout << endl << command << endl;
             cout << flush;
+            // Send request
             send(clientSocket, tempBuffer, strlen(tempBuffer), 0 );
+            // Read Response from Server
             read(clientSocket, buffer, 1024);
             cout << buffer << endl;
             cout << flush;
             int size;
+            // Read file size
             read(clientSocket, &size, sizeof(int));
             cout << "String Size : " << size << endl;
             cout << flush;
+            // Read content from server.
             string content = "";
             while (true){
                 char contentBuffer [1024];
@@ -132,22 +138,26 @@ int main(int argc, char const *argv[]){
             }
             cout << content << endl;
             cout << flush;
-            saveFile(splits[1] , content);
-        } else if (splits[0] == "client_post"){
-            string type = splits[0];
+            saveFile(words[1] , content);
+        } else if (words[0] == "client_post"){
+            string type = words[0];
             char * tempBuffer = &command[0];
             cout << endl <<command << endl;
             cout << flush;
+            // Send Request to Server
             send(clientSocket, tempBuffer, strlen(tempBuffer), 0 );
+            // Read response from server
             read(clientSocket, buffer, 1024);
             cout << buffer << endl;
             cout << flush;
-            string fileContent = getPostFileContent(splits[1]);
+            string fileContent = getPostFileContent(words[1]);
             char * tempFile = &fileContent[0];
             cout << fileContent << endl;
             cout << flush;
+            // send content to Server
             send(clientSocket, tempFile, strlen(tempFile), 0 );
             bzero(buffer, 1024);
+            // File is save successfully message
             read(clientSocket, buffer, 1024);
             cout << buffer << endl;
         }
@@ -158,31 +168,38 @@ int main(int argc, char const *argv[]){
     while (1){
         fgets(buffer, 1024,stdin);
         string req = buffer;
+        // Send Request to Server
         send(clientSocket, buffer, strlen(buffer), 0 );
         cout << "Buffer Sent" << endl;
         cout << flush;
         bzero(buffer, 1024);
+        // Read Response from Server
         read(clientSocket, buffer, 1024);
         cout << buffer << endl;
         cout << flush;
         bzero(buffer, 1024);
+        // Split Request by space.
         vector<string> spl = splitRequest(req);
-        if (spl[0] == "post" || spl[0] == "client_post"){
+        if (spl[0] == "client_post"){
             string fileContent = getPostFileContent(spl[1]);
             char * tempFile = &fileContent[0];
             cout << fileContent << endl;
             cout << flush;
+            // Send File to Server
             send(clientSocket, tempFile, strlen(tempFile), 0 );
+            // read confirmation message from Server
             read(clientSocket, buffer, 1024);
             cout << buffer << endl;
             cout << flush;
             bzero(buffer, 1024);
-        } else if (spl[0] == "get" || spl[0] == "client_get"){
+        } else if (spl[0] == "client_get"){
             int size;
+            // Read size of file from Server
             read(clientSocket, &size, sizeof(int));
             cout << "String Size : " << size << endl;
             cout << flush;
             string content = "";
+            // Read file from Server in chunks
             while (true){
                 char contentBuffer [1024];
                 if (content.size() == size){
@@ -197,6 +214,7 @@ int main(int argc, char const *argv[]){
                 content += string(contentBuffer,valRead);
             }
             cout << content << endl;
+            // Save File
             saveFile(spl[1] , content);
         }
     }
